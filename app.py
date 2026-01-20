@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from streamlit_autorefresh import st_autorefresh
 from typing import Set, Tuple
+import html
 
 
 import pandas as pd
@@ -96,6 +97,113 @@ def fmt_dt(dt: Optional[datetime]) -> str:
     if not dt:
         return "-"
     return dt.strftime("%H:%M")
+
+# ----------------------------
+# UI helpers (tooltip por célula)
+# ----------------------------
+COLOR_OK = "#1a7f37"     # verde
+COLOR_WARN = "#b54708"   # laranja
+COLOR_BAD = "#b42318"    # vermelho
+COLOR_MUTED = "#667085"  # cinza
+
+def tooltip_cell(text: str, tooltip: str, color: str = "#111", bold: bool = True) -> str:
+    """Renderiza uma célula compacta com tooltip (balão) via atributo HTML title."""
+    safe_text = html.escape(text or "")
+    safe_tip = html.escape(tooltip or "")
+    fw = "700" if bold else "400"
+    return (
+        f'<span title="{safe_tip}" '
+        f'style="color:{color}; font-weight:{fw}; white-space:nowrap;">'
+        f"{safe_text}"
+        "</span>"
+    )
+
+def render_table_html(rows: List[dict], col_order: List[str]) -> str:
+    """Tabela HTML para suportar tooltip em células (st.dataframe não renderiza HTML)."""
+    if not rows:
+        return "<div>Sem dados.</div>"
+
+    ths = "".join(
+        [
+            "<th style='text-align:left;padding:8px;border-bottom:1px solid #ddd;'>"
+            + html.escape(c)
+            + "</th>"
+            for c in col_order
+        ]
+    )
+
+    trs = []
+    for r in rows:
+        tds = []
+        for c in col_order:
+            v = r.get(c, "")
+            if isinstance(v, str) and v.strip().startswith("<span"):
+                cell = v
+            else:
+                cell = html.escape(str(v))
+            tds.append(
+                "<td style='padding:8px;border-bottom:1px solid #f2f2f2;white-space:nowrap;'>"
+                + cell
+                + "</td>"
+            )
+        trs.append("<tr>" + "".join(tds) + "</tr>")
+
+    return (
+        "<div style='overflow-x:auto;'>"
+        "<table style='width:100%; border-collapse:collapse; font-size:14px;'>"
+        f"<thead><tr>{ths}</tr></thead>"
+        f"<tbody>{''.join(trs)}</tbody>"
+        "</table>"
+        "</div>"
+    )
+
+    """Renderiza um texto compacto com tooltip (balão) via atributo HTML title."""
+    safe_text = html.escape(text or "")
+    safe_tip = html.escape(tooltip or "")
+    weight = "700" if bold else "400"
+    return (
+        f'<span title="{safe_tip}" '
+        f'style="color:{color}; font-weight:{weight}; white-space:nowrap;">'
+        f"{safe_text}</span>"
+    )
+
+
+def render_table_html(rows: List[dict], col_order: List[str]) -> str:
+    if not rows:
+        return "<div>Sem dados.</div>"
+
+    ths = "".join(
+        [
+            f"<th style='text-align:left;padding:8px;border-bottom:1px solid #ddd;'>{html.escape(c)}</th>"
+            for c in col_order
+        ]
+    )
+
+    body = []
+    for r in rows:
+        tds = []
+        for c in col_order:
+            v = r.get(c, "")
+            # Se for tooltip_cell (span), não escapar
+            if isinstance(v, str) and v.strip().startswith("<span"):
+                cell = v
+            else:
+                cell = html.escape(str(v))
+            tds.append(
+                "<td style='padding:8px;border-bottom:1px solid #f2f2f2;white-space:nowrap;'>"
+                + cell
+                + "</td>"
+            )
+        body.append("<tr>" + "".join(tds) + "</tr>")
+
+    return f"""
+    <div style="overflow-x:auto;">
+      <table style="width:100%; border-collapse:collapse; font-size:14px;">
+        <thead><tr>{ths}</tr></thead>
+        <tbody>{''.join(body)}</tbody>
+      </table>
+    </div>
+    """
 
 # ----------------------------
 # DB
@@ -362,7 +470,6 @@ with st.expander("⚙️ Correção de batidas (admin)", expanded=False):
 
 
 rows = []
-cell_meta = {}  # para colorir células específicas
 
 for idx, r in colabs.iterrows():
     matricula = str(r["matricula"] or "").strip()
@@ -377,8 +484,11 @@ for idx, r in colabs.iterrows():
             "Nome": nome,
             "Horario": horario_nome,
             "E1": "-", "S1": "-", "E2": "-", "S2": "-",
-            "B1": "-", "B2": "-", "B3": "-", "B4": "-",
-            "Status": "SEM HORÁRIO (cadastre no admin)",
+            "B1": tooltip_cell("—", "Sem horário vinculado", COLOR_MUTED, bold=False),
+            "B2": tooltip_cell("—", "Sem horário vinculado", COLOR_MUTED, bold=False),
+            "B3": tooltip_cell("—", "Sem horário vinculado", COLOR_MUTED, bold=False),
+            "B4": tooltip_cell("—", "Sem horário vinculado", COLOR_MUTED, bold=False),
+            "Status": tooltip_cell("SEM HORÁRIO", "Cadastre e vincule um horário no admin", COLOR_BAD),
         }
         rows.append(row)
         continue
@@ -401,16 +511,24 @@ for idx, r in colabs.iterrows():
     for i, bcol in enumerate(b_cols):
         if i < len(marks):
             m = marks[i]
-            # exemplo: "08:11 (Atrasado)"
-            suffix = m["label"]
-            b_vals[bcol] = f"{m['actual']} ({suffix})"
-            if not m["ok"]:
-                any_red = True
-                cell_meta[(idx, bcol)] = "red"
+            # Mostra APENAS o horário; o motivo fica no tooltip (balão)
+            expected = m.get("expected") or "-"
+            actual = m.get("actual") or "-"
+            delta = m.get("delta")
+            label = m.get("label") or ""
+
+            if delta is None:
+                tip = f"{label} | Previsto: {expected}"
             else:
-                cell_meta[(idx, bcol)] = "green"
+                tip = f"{label} | Previsto: {expected} | Atual: {actual} | Dif: {delta:+d} min"
+
+            if m.get("ok"):
+                b_vals[bcol] = tooltip_cell(actual, tip, COLOR_OK)
+            else:
+                any_red = True
+                b_vals[bcol] = tooltip_cell(actual, tip, COLOR_BAD)
         else:
-            b_vals[bcol] = "-"
+            b_vals[bcol] = tooltip_cell("—", "Sem evento", COLOR_MUTED, bold=False)
 
     # Intervalo curto/excedido também deve “puxar” vermelho, conforme sua regra opcional :contentReference[oaicite:15]{index=15}
     status_parts = []
@@ -421,49 +539,25 @@ for idx, r in colabs.iterrows():
 
     status = " | ".join(status_parts) if status_parts else ("OK" if not any_red else "FORA DA REGRA")
 
+    status_html = tooltip_cell(
+        status,
+        "Dentro da tolerância" if not any_red else "Há eventos fora da tolerância (passe o mouse nas batidas para ver o motivo)",
+        COLOR_OK if not any_red else COLOR_BAD,
+    )
+
     row = {
         "Matricula": matricula,
         "Nome": nome,
         "Horario": f"{horario_nome} [{e1}-{s1}" + (f" / {e2}-{s2}]" if pd.notna(e2) and pd.notna(s2) else "]"),
         "E1": e1, "S1": s1, "E2": (e2 if pd.notna(e2) else "-"), "S2": (s2 if pd.notna(s2) else "-"),
         **b_vals,
-        "Status": status,
+        "Status": status_html,
     }
     rows.append(row)
 
-df = pd.DataFrame(rows)
-
-def style_df(data: pd.DataFrame):
-    def color_cell(val: str, row_idx: int, col_name: str):
-        # default: sem cor
-        color = None
-        # achar índice original (como iterrows idx)
-        # aqui usamos posição do dataframe
-        return ""
-
-    styled = data.style
-
-    # Aplica cor nos B1..B4 (verde/vermelho)
-    def apply_colors(row):
-        styles = [""] * len(row)
-        # row.name é o índice do dataframe (0..n-1), mas nosso cell_meta foi indexado pelo idx original do iterrows
-        # então vamos colorir por conteúdo: se contém "(OK)" -> verde, senão se contém "(" e != "-" -> vermelho/verde já definido no texto
-        for j, col in enumerate(row.index):
-            if col in ("B1", "B2", "B3", "B4"):
-                v = str(row[col])
-                if v == "-" or v.strip() == "":
-                    continue
-                if "(OK)" in v or "(Intervalo OK)" in v:
-                    styles[j] = "color: green; font-weight: 700;"
-                else:
-                    # se tem "(...)" e não é OK => vermelho
-                    styles[j] = "color: red; font-weight: 700;"
-        return styles
-
-    styled = styled.apply(apply_colors, axis=1)
-    return styled
+COL_ORDER = ["Matricula", "Nome", "Horario", "E1", "S1", "E2", "S2", "B1", "B2", "B3", "B4", "Status"]
 
 with table_placeholder.container():
-    st.dataframe(style_df(df), use_container_width=True, hide_index=True)
+    st.markdown(render_table_html(rows, COL_ORDER), unsafe_allow_html=True)
 
 
