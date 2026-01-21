@@ -14,6 +14,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from ezpoint_web import EzPointWebClient
+import streamlit.components.v1 as components
 
 # Windows + .env com caracteres especiais:
 load_dotenv(encoding="latin-1")
@@ -558,6 +559,42 @@ for idx, r in colabs.iterrows():
 COL_ORDER = ["Matricula", "Nome", "Horario", "E1", "S1", "E2", "S2", "B1", "B2", "B3", "B4", "Status"]
 
 with table_placeholder.container():
-    st.markdown(render_table_html(rows, COL_ORDER), unsafe_allow_html=True)
+    table_html = render_table_html(rows, COL_ORDER)
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    printable_html = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Dashboard - Apontamentos do Dia</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; padding: 16px; }}
+    h2 {{ margin: 0 0 8px 0; }}
+    .meta {{ color: #555; font-size: 12px; margin-bottom: 12px; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+    th {{ text-align: left; padding: 6px; border-bottom: 1px solid #ddd; }}
+    td {{ padding: 6px; border-bottom: 1px solid #f0f0f0; white-space: nowrap; }}
+    @page {{ size: landscape; margin: 12mm; }}
+  </style>
+</head>
+<body>
+  <h2>Dashboard — Apontamentos do Dia</h2>
+  <div class="meta">Gerado em: {agora}</div>
+  {table_html}
+</body>
+</html>
+"""
+
+    st.download_button(
+        label="⬇️ Baixar tabela (HTML para imprimir em PDF)",
+        data=printable_html.encode("utf-8"),
+        file_name="dashboard_apontamentos.html",
+        mime="text/html",
+    )
+
+    st.markdown(table_html, unsafe_allow_html=True)
+
+
+
 
 
