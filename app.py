@@ -214,6 +214,15 @@ def get_con():
     con.execute("PRAGMA foreign_keys = ON;")
     return con
 
+def get_horario_dia(horario_id: int, dia_semana: int):
+    with get_con() as con:
+        return con.execute("""
+            SELECT entrada1, saida1, entrada2, saida2
+            FROM horario_dia
+            WHERE horario_id = ? AND dia_semana = ?
+        """, (horario_id, dia_semana)).fetchone()
+
+
 def load_colabs_with_shift() -> pd.DataFrame:
     """
     Traz colaborador + horário vigente.
@@ -476,7 +485,21 @@ for idx, r in colabs.iterrows():
     matricula = str(r["matricula"] or "").strip()
     nome = r["nome_completo"]
     horario_nome = r["horario_nome"] if pd.notna(r["horario_nome"]) else "SEM HORÁRIO"
-    e1, s1, e2, s2 = r["entrada1"], r["saida1"], r["entrada2"], r["saida2"]
+    #e1, s1, e2, s2 = r["entrada1"], r["saida1"], r["entrada2"], r["saida2"]   antigo
+    # dia da semana da data selecionada
+    dow = d.weekday()  # 0=segunda ... 6=domingo
+
+    # horário base (fallback)
+    e1 = r["entrada1"]
+    s1 = r["saida1"]
+    e2 = r["entrada2"]
+    s2 = r["saida2"]
+
+    # tenta buscar grade semanal
+    if pd.notna(r["horario_id"]):
+        wd = get_horario_dia(int(r["horario_id"]), dow)
+        if wd and any(wd):
+            e1, s1, e2, s2 = wd
 
     if pd.isna(e1) or pd.isna(s1):
         # Sem horário vinculado => vermelho
