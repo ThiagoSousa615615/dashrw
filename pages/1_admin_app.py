@@ -12,6 +12,66 @@ st.title("Administração — Colaboradores e Horários")
 # ----------------------
 # DB queries
 # ----------------------
+DIAS = [
+    (0, "Segunda"),
+    (1, "Terça"),
+    (2, "Quarta"),
+    (3, "Quinta"),
+    (4, "Sexta"),
+    (5, "Sábado"),
+    (6, "Domingo"),
+]
+
+DIA_NOME = {
+    0: "Segunda",
+    1: "Terça",
+    2: "Quarta",
+    3: "Quinta",
+    4: "Sexta",
+    5: "Sábado",
+    6: "Domingo",
+}
+
+
+def carregar_grade_semanal(horario_id: int) -> pd.DataFrame:
+    with get_con() as con:
+        df = pd.read_sql_query("""
+            SELECT dia_semana, entrada1, saida1, entrada2, saida2
+            FROM horario_dia
+            WHERE horario_id = ?
+            ORDER BY dia_semana
+        """, con, params=(horario_id,))
+    return df
+
+
+def listar_horarios_df():
+    with get_con() as con:
+        return pd.read_sql_query(
+            "SELECT id, nome, entrada1, saida1, entrada2, saida2 FROM horario ORDER BY nome",
+            con
+        )
+
+def get_grade_dia(horario_id: int, dia_semana: int):
+    with get_con() as con:
+        return con.execute("""
+            SELECT entrada1, saida1, entrada2, saida2
+            FROM horario_dia
+            WHERE horario_id = ? AND dia_semana = ?
+        """, (horario_id, dia_semana)).fetchone()
+
+def salvar_grade_dia(horario_id: int, dia_semana: int, e1, s1, e2, s2):
+    with get_con() as con:
+        con.execute("""
+            INSERT INTO horario_dia (horario_id, dia_semana, entrada1, saida1, entrada2, saida2)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(horario_id, dia_semana) DO UPDATE SET
+                entrada1 = excluded.entrada1,
+                saida1   = excluded.saida1,
+                entrada2 = excluded.entrada2,
+                saida2   = excluded.saida2
+        """, (horario_id, dia_semana, e1, s1, e2, s2))
+        con.commit()
+
 def listar_colaboradores():
     with get_con() as con:
         return pd.read_sql_query(
@@ -122,7 +182,7 @@ def vinculo_atual():
 # ----------------------
 # UI
 # ----------------------
-tab1, tab2, tab3 = st.tabs(["Horários", "Colaboradores", "Vincular horário"])
+tab1, tab2, tab3, tab4 = st.tabs(["Horários", "Colaboradores", "Vincular horário", "📅 Grade Semanal"])
 
 with tab1:
     st.subheader("Cadastrar horários")
@@ -151,6 +211,46 @@ with tab1:
     st.divider()
     st.subheader("Horários cadastrados")
     st.dataframe(listar_horarios(), use_container_width=True, hide_index=True)
+    st.divider()
+    st.subheader("Grade semanal do horário (por dia da semana)")
+
+    hors = listar_horarios_df()
+    if hors.empty:
+        st.info("Cadastre um horário primeiro.")
+    else:
+        opcoes = hors["nome"].tolist()
+        nome_sel = st.selectbox("Selecione um horário", opcoes, key="gs_horario_nome")
+        horario_id = int(hors.loc[hors["nome"] == nome_sel, "id"].iloc[0])
+
+        dia_label = st.selectbox("Dia da semana", [d[1] for d in DIAS], key="gs_dia")
+        dia_semana = [d[0] for d in DIAS if d[1] == dia_label][0]
+
+        cur = get_grade_dia(horario_id, dia_semana)
+        cur_e1, cur_s1, cur_e2, cur_s2 = cur if cur else ("", "", "", "")
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            e1 = st.text_input("Entrada 1 (HH:MM)", value=cur_e1 or "", key="gs_e1")
+        with c2:
+            s1 = st.text_input("Saída 1 (HH:MM)", value=cur_s1 or "", key="gs_s1")
+        with c3:
+            e2 = st.text_input("Entrada 2 (HH:MM) (opcional)", value=cur_e2 or "", key="gs_e2")
+        with c4:
+            s2 = st.text_input("Saída 2 (HH:MM) (opcional)", value=cur_s2 or "", key="gs_s2")
+
+        colA, colB = st.columns([1, 1])
+        with colA:
+            if st.button("Salvar dia", key="gs_save"):
+                # permite folga: tudo vazio => grava NULL
+                e1v = e1.strip() or None
+                s1v = s1.strip() or None
+                e2v = e2.strip() or None
+                s2v = s2.strip() or None
+
+                salvar_grade_dia(horario_id, dia_semana, e1v, s1v, e2v, s2v)
+                st.success("Grade do dia salva.")
+        with colB:
+            st.caption("Dica: Sábado pode ser só Entrada1/Saída1. Domingo pode ficar tudo vazio (folga).")
 
 with tab2:
     st.subheader("Colaboradores (banco)")
@@ -210,3 +310,37 @@ with tab3:
     st.divider()
     st.subheader("Visão atual (quem está em qual horário)")
     st.dataframe(vinculo_atual(), use_container_width=True, hide_index=True)
+
+with tab4:
+    st.subheader("Visualizar grade semanal por horário")
+
+    hors = listar_horarios_df()  # precisa ter colunas: id, nome
+    if hors.empty:
+        st.info("Cadastre um horário primeiro.")
+    else:
+        nome_sel = st.selectbox("Selecione um horário", hors["nome"].tolist(), key="view_grade_horario")
+        horario_id = int(hors.loc[hors["nome"] == nome_sel, "id"].iloc[0])
+
+        df = carregar_grade_semanal(horario_id)
+
+        if df.empty:
+            st.warning("Este horário ainda não tem grade semanal cadastrada (horario_dia).")
+        else:
+            df["Dia"] = df["dia_semana"].map(DIA_NOME)
+            df = df[["Dia", "entrada1", "saida1", "entrada2", "saida2"]]
+            df = df.rename(columns={
+                "entrada1": "E1",
+                "saida1": "S1",
+                "entrada2": "E2",
+                "saida2": "S2",
+            })
+
+            # opcional: marcar folga
+            def folga(row):
+                return "FOLGA" if not row["E1"] and not row["S1"] and not row["E2"] and not row["S2"] else ""
+            df["Observação"] = df.apply(folga, axis=1)
+
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+        st.caption("Dica: se você editar a grade na aba Horários (seção Grade semanal), ela aparece atualizada aqui.")
+
