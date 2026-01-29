@@ -498,8 +498,15 @@ for idx, r in colabs.iterrows():
     # tenta buscar grade semanal
     if pd.notna(r["horario_id"]):
         wd = get_horario_dia(int(r["horario_id"]), dow)
-        if wd and any(wd):
-            e1, s1, e2, s2 = wd
+
+        if wd is not None:
+            # Se existe registro no horario_dia:
+            # - tudo None => folga explícita
+            if all(v is None for v in wd):
+                e1 = s1 = e2 = s2 = None
+                horario_nome = f"{horario_nome} (FOLGA)"
+            else:
+                e1, s1, e2, s2 = wd
 
     if pd.isna(e1) or pd.isna(s1):
         # Sem horário vinculado => vermelho
