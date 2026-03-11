@@ -4,7 +4,7 @@ from db import get_con
 import os
 from ezpoint_web import EzPointWebClient
 from dotenv import load_dotenv
-load_dotenv(encoding="latin-1")  # ou "cp1252"
+load_dotenv(encoding="utf-8")
 
 st.set_page_config(page_title="Admin - Colaboradores e Horários", layout="wide")
 st.title("Administração — Colaboradores e Horários")

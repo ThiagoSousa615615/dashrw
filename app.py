@@ -17,7 +17,7 @@ from ezpoint_web import EzPointWebClient
 import streamlit.components.v1 as components
 
 # Windows + .env com caracteres especiais:
-load_dotenv(encoding="latin-1")
+load_dotenv(encoding="utf-8")
 
 DB_PATH = Path("data/ezpoint.db")
 
@@ -381,6 +381,38 @@ def analyze_employee_day(shift: Shift, punches: List[datetime], d: date, tol_min
     return marks, interval_info
 
 # ----------------------------
+# Agendador de e-mail (roda em background, inicializado uma vez por processo)
+# ----------------------------
+@st.cache_resource
+def _init_scheduler():
+    import atexit
+    import send_report
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    hora_envio = os.getenv("EMAIL_HORA_ENVIO", "17:30").strip()
+    try:
+        hora, minuto = hora_envio.split(":")
+        hora, minuto = int(hora), int(minuto)
+    except Exception:
+        hora, minuto = 17, 30
+
+    scheduler = BackgroundScheduler(daemon=True)
+    scheduler.add_job(
+        send_report.main,
+        "cron",
+        hour=hora,
+        minute=minuto,
+        id="email_report",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+    scheduler.start()
+    atexit.register(lambda: scheduler.shutdown(wait=False))
+    return scheduler
+
+_init_scheduler()
+
+# ----------------------------
 # UI
 # ----------------------------
 st.set_page_config(page_title="Dashboard — Apontamentos do Dia", layout="wide")
@@ -533,6 +565,7 @@ for idx, r in colabs.iterrows():
 
     punches = batidas_por_matricula.get(matricula, [])
     marks, interval_info = analyze_employee_day(shift, punches, d, DEFAULT_TOL_MIN, INTERVAL_TOL_MIN)
+    has_extra = len(punches) > 4
 
     # Monta colunas “B1..B4” mostrando batida real e marcação (OK / Atrasado etc.)
     b_cols = ["B1", "B2", "B3", "B4"]
@@ -570,9 +603,23 @@ for idx, r in colabs.iterrows():
 
     status = " | ".join(status_parts) if status_parts else ("OK" if not any_red else "FORA DA REGRA")
 
+    # Se houver mais de 4 batidas, só sinaliza com ⚠️
+    if has_extra:
+        status += " ⚠️"
+        any_red = True  # deixa vermelho para chamar atenção (recomendado)
+
+    tip_base = (
+        "Dentro da tolerância"
+        if not any_red
+        else "Há eventos fora da tolerância (passe o mouse nas batidas para ver o motivo)"
+    )
+
+    if has_extra:
+        tip_base += " | Há mais de 4 batidas no dia (verifique no Admin)."
+
     status_html = tooltip_cell(
         status,
-        "Dentro da tolerância" if not any_red else "Há eventos fora da tolerância (passe o mouse nas batidas para ver o motivo)",
+        tip_base,
         COLOR_OK if not any_red else COLOR_BAD,
     )
 

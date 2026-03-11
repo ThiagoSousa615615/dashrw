@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json as _json
 import requests
 from typing import Any, Dict, List, Optional
 import time
@@ -32,7 +33,8 @@ class EzPointWebClient:
     def login(self) -> str:
         url = f"{self.base_url}/login"
         payload = {"empresa": self.empresa, "usuario": self.usuario, "senha": self.senha}
-        r = self.session.post(url, json=payload, timeout=self.timeout)
+        body = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        r = self.session.post(url, data=body, headers={"Content-Type": "application/json"}, timeout=self.timeout)
         r.raise_for_status()
 
         # Algumas versões retornam texto puro; outras JSON. Vamos suportar ambos.
@@ -122,6 +124,10 @@ class EzPointWebClient:
                 "dataFim": data_fim,
             }
             r = self.session.get(url, headers=self._headers(), params=params, timeout=self.timeout)
+            if r.status_code == 500:
+                # Bug conhecido no servidor EzPoint (ex.: registro duplicado).
+                # Interrompe paginação e retorna o que foi coletado até agora.
+                break
             r.raise_for_status()
             data = r.json()
 

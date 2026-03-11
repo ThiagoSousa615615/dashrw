@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3:*)",
+      "Bash(python:*)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)",
+      "Bash(find F:/Github/dashrw -maxdepth 2 -type f \\\\\\( -name \"*.txt\" -o -name \"*.toml\" -o -name \"*.cfg\" -o -name \"*.ini\" -o -name \"setup.py\" \\\\\\) 2>/dev/null | head -20)"
+    ]
+  }
+}

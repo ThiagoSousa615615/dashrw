@@ -2,9 +2,11 @@ import pandas as pd
 import streamlit as st
 from db import get_con
 import os
+import sys
+from pathlib import Path
 from ezpoint_web import EzPointWebClient
 from dotenv import load_dotenv
-load_dotenv(encoding="latin-1")  # ou "cp1252"
+load_dotenv(encoding="utf-8")
 
 st.set_page_config(page_title="Admin - Colaboradores e Horários", layout="wide")
 st.title("Administração — Colaboradores e Horários")
@@ -78,6 +80,20 @@ def listar_colaboradores():
             "SELECT id, matricula, nome_completo, ativo FROM colaborador ORDER BY nome_completo",
             con
         )
+
+
+def deletar_colaboradores(ids: list[int]) -> int:
+    """Deleta colaboradores por id. CASCADE DELETE remove colaborador_horario automaticamente."""
+    if not ids:
+        return 0
+    placeholders = ",".join("?" * len(ids))
+    with get_con() as con:
+        cur = con.execute(
+            f"DELETE FROM colaborador WHERE id IN ({placeholders})",
+            ids,
+        )
+        con.commit()
+        return cur.rowcount
 
 
 def sync_colaboradores_web() -> tuple[int, int]:
@@ -179,10 +195,43 @@ def vinculo_atual():
             con,
         )
 
+
+def listar_destinatarios():
+    with get_con() as con:
+        return pd.read_sql_query(
+            "SELECT id, nome, email, ativo FROM email_destinatario ORDER BY email",
+            con
+        )
+
+
+def adicionar_destinatario(email: str, nome: str) -> None:
+    with get_con() as con:
+        con.execute(
+            "INSERT INTO email_destinatario (email, nome) VALUES (?, ?)",
+            (email.strip().lower(), nome.strip() or None)
+        )
+        con.commit()
+
+
+def toggle_destinatario(dest_id: int, ativo: int) -> None:
+    with get_con() as con:
+        con.execute(
+            "UPDATE email_destinatario SET ativo = ?, atualizado_em = datetime('now') WHERE id = ?",
+            (ativo, dest_id)
+        )
+        con.commit()
+
+
+def remover_destinatario(dest_id: int) -> None:
+    with get_con() as con:
+        con.execute("DELETE FROM email_destinatario WHERE id = ?", (dest_id,))
+        con.commit()
+
+
 # ----------------------
 # UI
 # ----------------------
-tab1, tab2, tab3, tab4 = st.tabs(["Horários", "Colaboradores", "Vincular horário", "📅 Grade Semanal"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Horários", "Colaboradores", "Vincular horário", "📅 Grade Semanal", "📧 Email"])
 
 with tab1:
     st.subheader("Cadastrar horários")
@@ -258,6 +307,8 @@ with tab2:
     colA, colB = st.columns([1, 3])
     with colA:
         if st.button("Sincronizar da API (WEB) /funcionario", type="primary", use_container_width=True):
+            st.session_state.pop("colab_confirm_delete", None)
+            st.session_state.pop("colab_ids_to_delete", None)
             with st.spinner("Sincronizando..."):
                 try:
                     upsertados, total_api = sync_colaboradores_web()
@@ -269,7 +320,59 @@ with tab2:
         st.caption("Clique para puxar/atualizar colaboradores via EzPoint WEB e gravar no banco.")
 
     st.divider()
-    st.dataframe(listar_colaboradores(), use_container_width=True, hide_index=True)
+
+    df_colabs = listar_colaboradores()
+    df_editor = df_colabs.copy()
+    df_editor.insert(0, "Selecionar", False)
+
+    edited = st.data_editor(
+        df_editor,
+        use_container_width=True,
+        hide_index=True,
+        key="colab_editor",
+        column_config={
+            "Selecionar": st.column_config.CheckboxColumn("Selecionar", default=False),
+            "id": st.column_config.NumberColumn("ID", disabled=True),
+            "matricula": st.column_config.TextColumn("Matrícula", disabled=True),
+            "nome_completo": st.column_config.TextColumn("Nome", disabled=True),
+            "ativo": st.column_config.NumberColumn("Ativo", disabled=True),
+        },
+    )
+
+    selected_mask = edited["Selecionar"] == True
+    selected_ids = [int(i) for i in df_colabs.loc[selected_mask.values, "id"].tolist()]
+
+    if selected_ids:
+        st.caption(f"{len(selected_ids)} colaborador(es) selecionado(s).")
+
+        if not st.session_state.get("colab_confirm_delete", False):
+            if st.button(f"Excluir {len(selected_ids)} colaborador(es) selecionado(s)", type="primary", key="btn_delete_colabs"):
+                st.session_state["colab_confirm_delete"] = True
+                st.session_state["colab_ids_to_delete"] = selected_ids
+                st.rerun()
+        else:
+            ids_to_delete = st.session_state.get("colab_ids_to_delete", [])
+            nomes = df_colabs.loc[df_colabs["id"].isin(ids_to_delete), "nome_completo"].tolist()
+            st.warning(f"Tem certeza que deseja excluir permanentemente: **{', '.join(nomes)}**? Esta ação não pode ser desfeita.")
+            col_yes, col_no = st.columns([1, 5])
+            with col_yes:
+                if st.button("Confirmar exclusão", type="primary", key="btn_confirm_yes"):
+                    try:
+                        n = deletar_colaboradores(ids_to_delete)
+                        st.session_state.pop("colab_confirm_delete", None)
+                        st.session_state.pop("colab_ids_to_delete", None)
+                        st.success(f"{n} colaborador(es) excluído(s) com sucesso.")
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(f"Erro ao excluir: {ex}")
+            with col_no:
+                if st.button("Cancelar", key="btn_confirm_no"):
+                    st.session_state.pop("colab_confirm_delete", None)
+                    st.session_state.pop("colab_ids_to_delete", None)
+                    st.rerun()
+    else:
+        st.session_state.pop("colab_confirm_delete", None)
+        st.session_state.pop("colab_ids_to_delete", None)
 
 
 with tab3:
@@ -344,3 +447,68 @@ with tab4:
 
         st.caption("Dica: se você editar a grade na aba Horários (seção Grade semanal), ela aparece atualizada aqui.")
 
+with tab5:
+    st.subheader("Destinatários do Relatório por E-mail")
+    hora_envio = os.getenv("EMAIL_HORA_ENVIO", "17:30")
+    smtp_host = os.getenv("SMTP_HOST", "não configurado")
+    smtp_usuario = os.getenv("SMTP_USUARIO", "não configurado")
+    st.info(
+        f"Envio automático diário às **{hora_envio}** via `{smtp_host}` ({smtp_usuario}). "
+        f"Para alterar o horário, edite `EMAIL_HORA_ENVIO` no `.env` e reinicie o app."
+    )
+
+    with st.form("form_add_email"):
+        col1, col2 = st.columns([2, 3])
+        with col1:
+            novo_email = st.text_input("E-mail", placeholder="gestor@empresa.com")
+        with col2:
+            novo_nome = st.text_input("Nome (opcional)", placeholder="Fulano de Tal")
+        submitted = st.form_submit_button("Adicionar destinatário", type="primary")
+        if submitted:
+            if not novo_email.strip():
+                st.error("Informe o e-mail.")
+            else:
+                try:
+                    adicionar_destinatario(novo_email, novo_nome)
+                    st.success(f"Destinatário {novo_email} adicionado.")
+                    st.rerun()
+                except Exception as ex:
+                    st.error(f"Erro: {ex}")
+
+    st.divider()
+    st.subheader("Lista de destinatários")
+    dests = listar_destinatarios()
+    if dests.empty:
+        st.info("Nenhum destinatário cadastrado.")
+    else:
+        for _, row in dests.iterrows():
+            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
+            c1.write(row["email"])
+            c2.write(row["nome"] if row["nome"] else "—")
+            label_toggle = "Pausar" if row["ativo"] else "Ativar"
+            if c3.button(label_toggle, key=f"toggle_{row['id']}"):
+                toggle_destinatario(int(row["id"]), 0 if row["ativo"] else 1)
+                st.rerun()
+            if c4.button("Remover", key=f"del_{row['id']}"):
+                remover_destinatario(int(row["id"]))
+                st.rerun()
+
+    st.divider()
+    st.subheader("Enviar relatório agora (teste)")
+    st.caption("Envia o relatório do dia atual para todos os destinatários ativos.")
+    if st.button("Enviar agora", type="primary"):
+        import subprocess
+        script = Path(__file__).parent.parent / "send_report.py"
+        with st.spinner("Enviando..."):
+            result = subprocess.run(
+                [sys.executable, str(script)],
+                capture_output=True, text=True, timeout=120,
+                cwd=str(Path(__file__).parent.parent)
+            )
+        if result.returncode == 0:
+            st.success("Relatório enviado com sucesso.")
+            if result.stdout:
+                st.code(result.stdout)
+        else:
+            st.error("Falha ao enviar o relatório.")
+            st.code(result.stderr or result.stdout)
