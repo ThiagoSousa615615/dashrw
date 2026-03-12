@@ -416,6 +416,8 @@ _init_scheduler()
 # UI
 # ----------------------------
 st.set_page_config(page_title="Dashboard — Apontamentos do Dia", layout="wide")
+from auth import require_auth
+require_auth()
 st.title("Dashboard — Horário x Apontamentos do dia")
 
 st_autorefresh(

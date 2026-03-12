@@ -10,13 +10,20 @@ streamlit run app.py
 
 # Initialize the SQLite database from schema
 python init_db.py
+
+# Migrations (run once, in order)
+python migrate_add_email_destinatario.py
+python migrate_add_usuarios.py          # requires ADMIN_EMAIL in .env
+
+# Send daily report manually
+python send_report.py
 ```
 
 The `.env` file must be loaded with `encoding="utf-8"` — the file is saved in UTF-8 and credentials may contain special characters like `¨`, `#`, `%`.
 
 ## Architecture
 
-This is a two-page Streamlit app that monitors employee time-punching against expected work schedules, integrated with the **EzPoint WEB** time-clock API.
+This is a two-page Streamlit app that monitors employee time-punching against expected work schedules, integrated with the **EzPoint WEB** time-clock API. Both pages are protected by a cookie-based authentication layer.
 
 ### Pages
 
@@ -27,10 +34,28 @@ This is a two-page Streamlit app that monitors employee time-punching against ex
 
 - **`ezpoint_web.py`** — HTTP client for `https://api.ezpointweb.com.br/ezweb-ws`. Handles JWT auth (POST `/login`), fetches employees (GET `/funcionario`), and paginates time punches (GET `/batida`). The API has a ~30 req/min limit; the client adds a 0.25s sleep between pages. Ver documentação completa da API: [`ezpoint_api_documentacao.md`](ezpoint_api_documentacao.md).
 - **`db.py`** — SQLite connection helper. DB file lives at `data/ezpoint.db`.
+- **`auth.py`** — Authentication layer. Cookie-based session (7-day persistent cookie via `extra-streamlit-components`), 30-min idle timeout, forced password change on first access, and password reset by e-mail. Public entry point: `require_auth()` — call it after `set_page_config` and before `st.title` in every page.
+- **`send_report.py`** — Generates the daily HTML punch report and sends it by e-mail via SMTP. Reuses the same analysis logic as `app.py`. Scheduled externally (Windows Task Scheduler). Also exposes `send_email()`, which is reused by `auth.py` for password-reset e-mails.
+
+### Authentication flow (`auth.py`)
+
+```
+Acesso → cookie válido? → sim → session restaurada → idle OK? → sim → dashboard
+                       → não → login form → credenciais OK?
+                                    → primeiro_acesso=1 → troca senha → set cookie → dashboard
+                                    → não                              → set cookie → dashboard
+```
+
+- **Cookie**: signed with `itsdangerous.URLSafeTimedSerializer`, expires in 7 days. Not cleared on idle timeout — only `session_state` is cleared, so the cookie restores the session automatically on the next visit.
+- **Idle timeout**: 30 min of inactivity. The `st_autorefresh` (30 s) keeps the session alive while the tab is open.
+- **Password reset**: generates a strong temporary password with `secrets`, sets `primeiro_acesso=1`, sends it by e-mail via the existing SMTP config. No token links — simpler for an internal system.
+- **Admin bootstrap**: if the `usuarios` table is empty, `ensure_usuarios_table()` inserts `admin / Tecbio2026` (bcrypt-hashed) with `primeiro_acesso=1`. Requires `ADMIN_EMAIL` in `.env`.
+
+---
 
 ### Database schema (`data/ezpoint.db`)
 
-`schema.sql` está desatualizado. A estrutura real do banco foi extraída diretamente de `data/ezpoint.db`.
+`schema.sql` is kept up to date as reference, but the authoritative structure is always the live DB.
 
 > Tabelas `colaborador_old` e `colaborador_horario_old` são legado das migrations e estão vazias — não são usadas pelo app.
 
@@ -126,13 +151,51 @@ Batidas marcadas pelo admin para serem ignoradas no cálculo do dashboard.
 
 ---
 
+#### `email_destinatario`
+
+Destinatários do relatório diário enviado por `send_report.py`. Gerenciado pelo admin panel.
+
+| Coluna | Tipo | Obrigatório | Default | Descrição |
+|---|---|---|---|---|
+| `id` | INTEGER | PK | autoincrement | — |
+| `email` | TEXT | NOT NULL UNIQUE | — | Endereço de e-mail |
+| `nome` | TEXT | — | NULL | Nome amigável |
+| `ativo` | INTEGER | NOT NULL | `1` | 1 = recebe relatório |
+| `criado_em` | TEXT | NOT NULL | `datetime('now')` | ISO datetime |
+| `atualizado_em` | TEXT | NOT NULL | `datetime('now')` | ISO datetime |
+
+Índice: `idx_email_destinatario_ativo(ativo)`.
+
+---
+
+#### `usuarios`
+
+Usuários com acesso ao dashboard. Criada por `migrate_add_usuarios.py`.
+
+| Coluna | Tipo | Obrigatório | Default | Descrição |
+|---|---|---|---|---|
+| `id` | INTEGER | PK | autoincrement | — |
+| `username` | TEXT | NOT NULL UNIQUE | — | Login |
+| `email` | TEXT | NOT NULL UNIQUE | — | E-mail para redefinição de senha |
+| `senha_hash` | TEXT | NOT NULL | — | bcrypt hash |
+| `primeiro_acesso` | INTEGER | NOT NULL | `1` | 1 = forçar troca de senha no próximo login |
+| `ativo` | INTEGER | NOT NULL | `1` | 1 = pode fazer login |
+| `criado_em` | TEXT | NOT NULL | `datetime('now')` | ISO datetime |
+| `atualizado_em` | TEXT | NOT NULL | `datetime('now')` | ISO datetime |
+
+Admin inicial: `username="admin"`, `email=ADMIN_EMAIL`, `senha="Tecbio2026"` (troca obrigatória no primeiro acesso).
+
+---
+
 #### Relacionamentos
 
 ```
-horario (id) ←──── horario_dia (horario_id)      [CASCADE DELETE]
-horario (id) ←──── colaborador_horario (horario_id) [RESTRICT DELETE]
+horario (id) ←──── horario_dia (horario_id)         [CASCADE DELETE]
+horario (id) ←──── colaborador_horario (horario_id)  [RESTRICT DELETE]
 colaborador (id) ←─ colaborador_horario (colaborador_id) [CASCADE DELETE]
 ```
+
+---
 
 ### Punch analysis logic (`app.py`)
 
@@ -154,3 +217,11 @@ colaborador (id) ←─ colaborador_horario (colaborador_id) [CASCADE DELETE]
 | `TOL_MIN` | `10` | Tolerance in minutes per punch |
 | `INTERVAL_TOL_MIN` | `10` | Tolerance for break interval |
 | `AUTO_REFRESH_SEC` | `30` | Dashboard auto-refresh interval |
+| `SMTP_HOST` | — | SMTP server hostname |
+| `SMTP_PORT` | `587` | SMTP server port (STARTTLS) |
+| `SMTP_USUARIO` | — | SMTP login / sender address |
+| `SMTP_SENHA` | — | SMTP password |
+| `EMAIL_REMETENTE_NOME` | `Dashboard Ponto` | Display name in From header |
+| `EMAIL_ASSUNTO` | `Relatório Diário de Apontamentos` | Subject prefix for daily report |
+| `ADMIN_EMAIL` | — | E-mail do usuário admin inicial; required by `migrate_add_usuarios.py` |
+| `AUTH_COOKIE_SECRET` | — | Secret key for signing auth cookies (32+ random chars); generate with `python -c "import secrets; print(secrets.token_hex(32))"` |

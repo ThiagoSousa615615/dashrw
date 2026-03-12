@@ -1,0 +1,8 @@
+streamlit
+streamlit-autorefresh
+extra-streamlit-components
+bcrypt
+itsdangerous
+pandas
+python-dotenv
+APScheduler

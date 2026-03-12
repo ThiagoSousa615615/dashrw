@@ -101,3 +101,20 @@ CREATE TABLE IF NOT EXISTS email_destinatario (
 
 CREATE INDEX IF NOT EXISTS idx_email_destinatario_ativo
   ON email_destinatario(ativo);
+
+-- ------------------------------------------------------------
+-- usuarios
+-- Usuários com acesso ao dashboard. Admin inicial criado via
+-- migrate_add_usuarios.py com senha padrão Tecbio2026
+-- (primeiro_acesso=1 força troca na primeira entrada).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS usuarios (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  username         TEXT    NOT NULL UNIQUE,
+  email            TEXT    NOT NULL UNIQUE,
+  senha_hash       TEXT    NOT NULL,
+  primeiro_acesso  INTEGER NOT NULL DEFAULT 1,
+  ativo            INTEGER NOT NULL DEFAULT 1,
+  criado_em        TEXT    NOT NULL DEFAULT (datetime('now')),
+  atualizado_em    TEXT    NOT NULL DEFAULT (datetime('now'))
+);

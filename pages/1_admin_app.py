@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 load_dotenv(encoding="utf-8")
 
 st.set_page_config(page_title="Admin - Colaboradores e Horários", layout="wide")
+from auth import require_auth
+require_auth()
 st.title("Administração — Colaboradores e Horários")
 
 # ----------------------
