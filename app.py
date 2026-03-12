@@ -1,8 +1,6 @@
 import os
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, date, time, timedelta
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from streamlit_autorefresh import st_autorefresh
 from typing import Set, Tuple
@@ -15,11 +13,10 @@ from dotenv import load_dotenv
 
 from ezpoint_web import EzPointWebClient
 import streamlit.components.v1 as components
+from db import get_con
 
 # Windows + .env com caracteres especiais:
 load_dotenv(encoding="utf-8")
-
-DB_PATH = Path("data/ezpoint.db")
 
 # ----------------------------
 # Regras (da sua doc)
@@ -207,12 +204,6 @@ def render_table_html(rows: List[dict], col_order: List[str]) -> str:
     """
 
 # ----------------------------
-# DB
-# ----------------------------
-def get_con():
-    con = sqlite3.connect(DB_PATH)
-    con.execute("PRAGMA foreign_keys = ON;")
-    return con
 
 def get_horario_dia(horario_id: int, dia_semana: int):
     with get_con() as con:
